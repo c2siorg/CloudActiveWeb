@@ -5,7 +5,7 @@
 
   vars:
     home_dir: '/home/{{ ssh_user }}'
-    data_dir: '{{ home_dir }}/data/' # data directory
+    data_dir: '{{ home_dir }}/data' # data directory
     archive_file: '{{ ansible_date_time.date }}-part{{ vm_no }}.bz2' # archive file
 
   remote_user: '{{ ssh_user }}'
@@ -30,30 +30,29 @@
           - wget
           - libbz2-dev
           - acl
+          - google-cloud-sdk
         state: present
       become: yes
 
     # Install required packages for script file
-    - name: install pandas, tqdm
+    - name: install pandas, tqdm, requests
       pip:
         name:
           - pandas
           - tqdm
+          - requests
       become: yes
-
-    # Install required packages for google cloud storage
-    - name: Installing Google-Auth python library
-      pip:
-        name: google-auth
-
-    - name: Installing Google-Cloud Storage python library
-      pip:
-        name: google-cloud-storage
 
     # Install Compressing Tools
     - name: Installing bzip2
       apt:
         name: bzip2
+        state: present
+      become: true
+
+    - name: Installing pbzip2
+      apt:
+        name: pbzip2
         state: present
       become: true
 
@@ -64,7 +63,11 @@
       ansible.builtin.copy:
         src: 'keys/{{ service_account_file }}'
         dest: '{{ home_dir }}/service_account.json'
-        mode: 0644
+        mode: 0777
+
+    # gcloud authentication using service key
+    - name: gcloud authentication using service key
+      shell: gcloud auth activate-service-account {{ gcp_service_email }} --key-file={{ home_dir }}/service_account.json
 
     # ###########################################################################################
     #                              Create Data Directory and Copy Seed File
@@ -73,13 +76,13 @@
       file:
         path: '{{ data_dir }}'
         state: directory
-        mode: 0644
+        mode: 0777
 
     - name: copy seed file
       ansible.builtin.copy:
         src: '{{ seed_file }}'
         dest: '{{ data_dir }}/{{ seed_file }}'
-        mode: 0644
+        mode: 0777
 
     # ###########################################################################################
     #                                        Run Python Script
@@ -111,18 +114,9 @@
         path: '{{ data_dir }}'
         dest: '{{ home_dir }}/{{ archive_file }}'
         format: bz2
-        mode: 0644
 
     # ###########################################################################################
-    #                              Upload Archive File to GCP Bucket
+    #                              Copy Archive File to GCP Bucket
     # ###########################################################################################
-    - name: Upload {{ archive_file }}
-      google.cloud.gcp_storage_object:
-        action: upload
-        bucket: '{{ gcp_bucket }}'
-        src: '{{ home_dir }}/{{ archive_file }}'
-        dest: '{{ archive_file }}'
-        project: '{{ project }}'
-        auth_kind: serviceaccount
-        service_account_file: '{{ home_dir }}/service_account.json'
-        state: present
+    - name: Copy {{ archive_file }}
+      shell: gsutil cp {{ home_dir }}/{{ archive_file }} gs://{{ gcp_bucket }}/
