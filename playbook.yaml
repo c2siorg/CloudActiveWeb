@@ -1,0 +1,122 @@
+---
+- hosts: all
+
+  gather_facts: true
+
+  vars:
+    home_dir: '/home/{{ ssh_user }}'
+    data_dir: '{{ home_dir }}/data' # data directory
+    archive_file: '{{ ansible_date_time.date }}-part{{ vm_no }}.bz2' # archive file
+
+  remote_user: '{{ ssh_user }}'
+
+  environment:
+    PATH: '{{ ansible_env.PATH }}:{{ home_dir }}/.local/bin'
+
+  tasks:
+    # Install build essentials
+    - name: Install build essentials.
+      apt:
+        pkg:
+          - build-essential
+          - zlib1g-dev
+          - libncurses5-dev
+          - libgdbm-dev
+          - libnss3-dev
+          - libssl-dev
+          - libreadline-dev
+          - libffi-dev
+          - libsqlite3-dev
+          - wget
+          - libbz2-dev
+          - acl
+          - google-cloud-sdk
+        state: present
+      become: yes
+
+    # Install required packages for script file
+    - name: install pandas, tqdm, requests
+      pip:
+        name:
+          - pandas
+          - tqdm
+          - requests
+      become: yes
+
+    # Install Compressing Tools
+    - name: Installing bzip2
+      apt:
+        name: bzip2
+        state: present
+      become: true
+
+    - name: Installing pbzip2
+      apt:
+        name: pbzip2
+        state: present
+      become: true
+
+    # ###########################################################################################
+    #                     Upload File / Copy File From Local Machine to Remote Machine
+    # ###########################################################################################
+    - name: Copying Service Account JSON File to Remote Machine from Local Machine
+      ansible.builtin.copy:
+        src: 'keys/{{ service_account_file }}'
+        dest: '{{ home_dir }}/service_account.json'
+        mode: 0777
+
+    # gcloud authentication using service key
+    - name: gcloud authentication using service key
+      shell: gcloud auth activate-service-account {{ gcp_service_email }} --key-file={{ home_dir }}/service_account.json
+
+    # ###########################################################################################
+    #                              Create Data Directory and Copy Seed File
+    # ###########################################################################################
+    - name: create data directory
+      file:
+        path: '{{ data_dir }}'
+        state: directory
+        mode: 0777
+
+    - name: copy seed file
+      ansible.builtin.copy:
+        src: '{{ seed_file }}'
+        dest: '{{ data_dir }}/{{ seed_file }}'
+        mode: 0777
+
+    # ###########################################################################################
+    #                                        Run Python Script
+    # ###########################################################################################
+    - name: Run {{ script }}
+      ansible.builtin.script: '{{ script }} {{ vm_no }} 128'
+      args:
+        executable: python3
+        chdir: '{{ data_dir }}'
+
+    # ###########################################################################################
+    #                     Remove Seed and Script File from Data Directory
+    # ###########################################################################################
+    - name: Remove {{ script }} file
+      file:
+        path: '{{ data_dir }}/{{ script }}'
+        state: absent
+
+    - name: Remove {{ seed_file }} file
+      file:
+        path: '{{ data_dir }}/{{ seed_file }}'
+        state: absent
+
+    # ###########################################################################################
+    #                                     Archive Data Directory
+    # ###########################################################################################
+    - name: Archive data folder
+      archive:
+        path: '{{ data_dir }}'
+        dest: '{{ home_dir }}/{{ archive_file }}'
+        format: bz2
+
+    # ###########################################################################################
+    #                              Copy Archive File to GCP Bucket
+    # ###########################################################################################
+    - name: Copy {{ archive_file }}
+      shell: gsutil cp {{ home_dir }}/{{ archive_file }} gs://{{ gcp_bucket }}/
